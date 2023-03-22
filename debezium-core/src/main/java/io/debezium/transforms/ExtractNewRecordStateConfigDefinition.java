@@ -133,4 +133,12 @@ public class ExtractNewRecordStateConfigDefinition {
                     + "Optionally one can also map new field name like version:VERSION,connector:CONNECTOR,source.ts_ms:EVENT_TIMESTAMP."
                     + "Please note that the new field name is case-sensitive.");
 
+    public static final Field SCHEMA_CHANGE_RECORDS_ADD_HEADERS_ENABLED = Field.create("schema.change.record.add.headers.enabled")
+            .withDisplayName("Extract schema change records add headers to be sent.")
+            .withType(ConfigDef.Type.BOOLEAN)
+            .withWidth(ConfigDef.Width.LONG)
+            .withImportance(ConfigDef.Importance.LOW)
+            .withDefault(false)
+            .withDescription("Extract schema change records add headers to be sent.");
+
 }

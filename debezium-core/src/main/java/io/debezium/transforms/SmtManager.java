@@ -10,12 +10,14 @@ import java.util.Map;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.config.ConfigValue;
 import org.apache.kafka.connect.connector.ConnectRecord;
+import org.apache.kafka.connect.data.Schema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.debezium.config.Configuration;
 import io.debezium.config.Field;
 import io.debezium.data.Envelope;
+import io.debezium.schema.SchemaFactory;
 
 /**
  * A class used by all Debezium supplied SMTs to centralize common logic.
@@ -37,6 +39,15 @@ public class SmtManager<R extends ConnectRecord<R>> {
                 record.valueSchema().name() == null ||
                 !Envelope.isEnvelopeSchema(record.valueSchema())) {
             LOGGER.debug("Expected Envelope for transformation, passing it unchanged");
+            return false;
+        }
+        return true;
+    }
+
+    public boolean isValidSchemaChange(final Schema schema) {
+        if (schema == null || schema.name() == null ||
+                !SchemaFactory.get().isSchemaChangeSchema(schema.name())) {
+            LOGGER.debug("Expected schema change schema for transformation, passing it unchanged");
             return false;
         }
         return true;

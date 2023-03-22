@@ -87,6 +87,10 @@ public class SchemaFactory {
         return schemaFactoryObject;
     }
 
+    public boolean isSchemaChangeSchema(String schemaName) {
+        return schemaName.endsWith(SCHEMA_HISTORY_CONNECTOR_VALUE_SCHEMA_NAME_SUFFIX);
+    }
+
     public Schema heartbeatKeySchema(SchemaNameAdjuster adjuster) {
         return SchemaBuilder.struct()
                 .name(adjuster.adjust(HEARTBEAT_KEY_SCHEMA_NAME))

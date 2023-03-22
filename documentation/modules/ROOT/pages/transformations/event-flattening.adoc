@@ -203,6 +203,7 @@ transforms=unwrap,...
 transforms.unwrap.type=io.debezium.transforms.ExtractNewRecordState
 transforms.unwrap.add.fields=op,table,lsn,source.ts_ms
 transforms.unwrap.add.headers=db
+transforms.unwrap.schema.change.record.add.headers.enabled=true
 transforms.unwrap.delete.handling.mode=rewrite
 ----
 
@@ -327,5 +328,12 @@ If you specify a field that is not in the change event record, the SMT does not 
 |Specifies whether you want the SMT to remove non-optional fields that are included in the xref:extract-new-record-state-drop-fields-header-name[`drop.fields.header.name`] configuration property. +
  +
 By default, the SMT only removes fields that are marked `optional`.
+
+[id="extract-new-record-state-schema-change-record-add-headers-enabled"]
+|xref:extract-new-record-state-schema-change-record-add-headers-enabled[`schema.change.record.add.headers.enabled`]
+|`false`
+|Support schema change record adding headers.
+
+
 
 |===

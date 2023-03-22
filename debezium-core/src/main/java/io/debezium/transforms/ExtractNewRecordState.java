@@ -5,8 +5,16 @@
  */
 package io.debezium.transforms;
 
-import static org.apache.kafka.connect.transforms.util.Requirements.requireStruct;
-
+import io.debezium.config.Configuration;
+import io.debezium.config.Field;
+import io.debezium.data.Envelope;
+import io.debezium.data.Envelope.FieldName;
+import io.debezium.data.Envelope.Operation;
+import io.debezium.pipeline.txmetadata.TransactionMonitor;
+import io.debezium.relational.history.HistoryRecord;
+import io.debezium.transforms.ExtractNewRecordStateConfigDefinition.DeleteHandling;
+import io.debezium.util.BoundedConcurrentHashMap;
+import io.debezium.util.Strings;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -16,7 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.connect.connector.ConnectRecord;
 import org.apache.kafka.connect.data.Schema;
@@ -34,15 +41,7 @@ import org.apache.kafka.connect.transforms.util.SchemaUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import io.debezium.config.Configuration;
-import io.debezium.config.Field;
-import io.debezium.data.Envelope;
-import io.debezium.data.Envelope.FieldName;
-import io.debezium.data.Envelope.Operation;
-import io.debezium.pipeline.txmetadata.TransactionMonitor;
-import io.debezium.transforms.ExtractNewRecordStateConfigDefinition.DeleteHandling;
-import io.debezium.util.BoundedConcurrentHashMap;
-import io.debezium.util.Strings;
+import static org.apache.kafka.connect.transforms.util.Requirements.requireStruct;
 
 /**
  * Debezium generates CDC (<code>Envelope</code>) records that are struct of values containing values
@@ -74,43 +73,43 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
     private static final Pattern NEW_FIELD_SEPARATOR = Pattern.compile(":");
 
     private static final Field DROP_FIELDS_HEADER = Field.create("drop.fields.header.name")
-            .withDisplayName("Specifies a header that contains a list of field names to be removed")
-            .withType(ConfigDef.Type.STRING)
-            .withWidth(ConfigDef.Width.SHORT)
-            .withImportance(ConfigDef.Importance.LOW)
-            .withDescription("Specifies the name of a header that contains a list of fields to be removed from the event value.");
+        .withDisplayName("Specifies a header that contains a list of field names to be removed")
+        .withType(ConfigDef.Type.STRING)
+        .withWidth(ConfigDef.Width.SHORT)
+        .withImportance(ConfigDef.Importance.LOW)
+        .withDescription("Specifies the name of a header that contains a list of fields to be removed from the event value.");
 
     private static final Field DROP_FIELDS_FROM_KEY = Field.create("drop.fields.from.key")
-            .withDisplayName("Specifies whether the fields to be dropped should also be omitted from the key")
-            .withType(ConfigDef.Type.BOOLEAN)
-            .withWidth(ConfigDef.Width.SHORT)
-            .withImportance(ConfigDef.Importance.LOW)
-            .withDefault(false)
-            .withDescription("Specifies whether to apply the drop fields behavior to the event key as well as the value. "
-                    + "Default behavior is to only remove fields from the event value, not the key.");
+        .withDisplayName("Specifies whether the fields to be dropped should also be omitted from the key")
+        .withType(ConfigDef.Type.BOOLEAN)
+        .withWidth(ConfigDef.Width.SHORT)
+        .withImportance(ConfigDef.Importance.LOW)
+        .withDefault(false)
+        .withDescription("Specifies whether to apply the drop fields behavior to the event key as well as the value. "
+            + "Default behavior is to only remove fields from the event value, not the key.");
 
     private static final Field DROP_FIELDS_KEEP_SCHEMA_COMPATIBLE = Field.create("drop.fields.keep.schema.compatible")
-            .withDisplayName("Specifies if fields are dropped, will the event's schemas be compatible")
-            .withType(ConfigDef.Type.BOOLEAN)
-            .withWidth(ConfigDef.Width.SHORT)
-            .withImportance(ConfigDef.Importance.LOW)
-            .withDefault(true)
-            .withDescription("Controls the output event's schema compatibility when using the drop fields feature. "
-                    + "`true`: dropped fields are removed if the schema indicates its optional leaving the schemas unchanged, "
-                    + "`false`: dropped fields are removed from the key/value schemas, regardless of optionality.");
-
-    private boolean dropTombstones;
-    private String dropFieldsHeaderName;
-    private boolean dropFieldsFromKey;
-    private boolean dropFieldsKeepSchemaCompatible;
-    private DeleteHandling handleDeletes;
-    private List<FieldReference> additionalHeaders;
-    private List<FieldReference> additionalFields;
-    private String routeByField;
+        .withDisplayName("Specifies if fields are dropped, will the event's schemas be compatible")
+        .withType(ConfigDef.Type.BOOLEAN)
+        .withWidth(ConfigDef.Width.SHORT)
+        .withImportance(ConfigDef.Importance.LOW)
+        .withDefault(true)
+        .withDescription("Controls the output event's schema compatibility when using the drop fields feature. "
+            + "`true`: dropped fields are removed if the schema indicates its optional leaving the schemas unchanged, "
+            + "`false`: dropped fields are removed from the key/value schemas, regardless of optionality.");
     private final ExtractField<R> afterDelegate = new ExtractField.Value<>();
     private final ExtractField<R> beforeDelegate = new ExtractField.Value<>();
     private final InsertField<R> removedDelegate = new InsertField.Value<>();
     private final InsertField<R> updatedDelegate = new InsertField.Value<>();
+    private boolean dropTombstones;
+    private String dropFieldsHeaderName;
+    private boolean dropFieldsFromKey;
+    private boolean dropFieldsKeepSchemaCompatible;
+    private boolean schemaChangeRecordAddHeadersEnabled;
+    private DeleteHandling handleDeletes;
+    private List<FieldReference> additionalHeaders;
+    private List<FieldReference> additionalFields;
+    private String routeByField;
     private BoundedConcurrentHashMap<Schema, Schema> schemaUpdateCache;
     private SmtManager<R> smtManager;
 
@@ -120,7 +119,7 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         smtManager = new SmtManager<>(config);
 
         final Field.Set configFields = Field.setOf(ExtractNewRecordStateConfigDefinition.DROP_TOMBSTONES,
-                ExtractNewRecordStateConfigDefinition.HANDLE_DELETES);
+            ExtractNewRecordStateConfigDefinition.HANDLE_DELETES);
         if (!config.validateAndRecord(configFields, LOGGER::error)) {
             throw new ConnectException("Unable to validate config.");
         }
@@ -139,7 +138,7 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         dropFieldsHeaderName = config.getString(DROP_FIELDS_HEADER);
         dropFieldsFromKey = config.getBoolean(DROP_FIELDS_FROM_KEY);
         dropFieldsKeepSchemaCompatible = config.getBoolean(DROP_FIELDS_KEEP_SCHEMA_COMPATIBLE);
-
+        schemaChangeRecordAddHeadersEnabled = config.getBoolean(ExtractNewRecordStateConfigDefinition.SCHEMA_CHANGE_RECORDS_ADD_HEADERS_ENABLED);
         Map<String, String> delegateConfig = new LinkedHashMap<>();
         delegateConfig.put("field", "before");
         beforeDelegate.configure(delegateConfig);
@@ -169,20 +168,26 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
                 return null;
             }
             if (!additionalHeaders.isEmpty()) {
-                Headers headersToAdd = makeHeaders(additionalHeaders, (Struct) record.value());
-                headersToAdd.forEach(h -> record.headers().add(h));
+                addHeaders(record);
             }
             return record;
+        }
+
+        // extract schema change record
+        boolean isSchemaChange = smtManager.isValidSchemaChange(record.valueSchema());
+        if (isSchemaChange) {
+            if (schemaChangeRecordAddHeadersEnabled) {
+                addHeaders(record);
+                return applySchemaChangeRecord(record);
+            } else {
+                return record;
+            }
         }
 
         if (!smtManager.isValidEnvelope(record)) {
             return record;
         }
-
-        if (!additionalHeaders.isEmpty()) {
-            Headers headersToAdd = makeHeaders(additionalHeaders, (Struct) record.value());
-            headersToAdd.forEach(h -> record.headers().add(h));
-        }
+        addHeaders(record);
 
         R newRecord = afterDelegate.apply(record);
         if (newRecord.value() == null && beforeDelegate.apply(record).value() == null) {
@@ -214,8 +219,7 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
                 default:
                     return newRecord;
             }
-        }
-        else {
+        } else {
             // Add on any requested source fields from the original record to the new unwrapped record
             if (routeByField != null) {
                 Struct recordValue = requireStruct(newRecord.value(), "Read record to set topic routing for CREATE / UPDATE");
@@ -230,27 +234,58 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
             }
 
             // Handling insert and update records
-            switch (handleDeletes) {
-                case REWRITE:
-                    LOGGER.trace("Insert/update message {} requested to be rewritten", record.key());
-                    return updatedDelegate.apply(newRecord);
-                default:
-                    return newRecord;
+            if (handleDeletes == DeleteHandling.REWRITE) {
+                LOGGER.trace("Insert/update message {} requested to be rewritten", record.key());
+                return updatedDelegate.apply(newRecord);
             }
+            return newRecord;
         }
+    }
+
+    private void addHeaders(R record) {
+        if (!additionalHeaders.isEmpty()) {
+            Headers headersToAdd = makeHeaders(additionalHeaders, (Struct) record.value());
+            headersToAdd.forEach(h -> record.headers().add(h));
+        }
+    }
+
+    private R applySchemaChangeRecord(R record) {
+        SchemaBuilder builder = SchemaUtil.copySchemaBasics(record.valueSchema(), SchemaBuilder.struct());
+        for (org.apache.kafka.connect.data.Field field : record.valueSchema().fields()) {
+            if (HistoryRecord.Fields.SOURCE.equals(field.name())) {
+                // Exclude source field
+                continue;
+            }
+            builder.field(field.name(), field.schema());
+        }
+
+        Schema updateSchema = builder.schema();
+        final Struct value = requireStruct(record.value(), PURPOSE);
+        Struct updateValue = new Struct(updateSchema);
+        updateSchema.fields().forEach(field -> updateValue.put(field, value.getWithoutDefault(field.name())));
+
+        return record.newRecord(
+            record.topic(),
+            record.kafkaPartition(),
+            record.keySchema(),
+            record.key(),
+            updateSchema,
+            updateValue,
+            record.timestamp(),
+            record.headers());
     }
 
     private R setTopic(String updatedTopicValue, R record) {
         String topicName = updatedTopicValue == null ? record.topic() : updatedTopicValue;
 
         return record.newRecord(
-                topicName,
-                record.kafkaPartition(),
-                record.keySchema(),
-                record.key(),
-                record.valueSchema(),
-                record.value(),
-                record.timestamp());
+            topicName,
+            record.kafkaPartition(),
+            record.keySchema(),
+            record.key(),
+            record.valueSchema(),
+            record.value(),
+            record.timestamp());
     }
 
     /**
@@ -267,8 +302,12 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
                 }
                 continue;
             }
+            if (smtManager.isValidSchemaChange(originalRecordValue.schema()) && FieldName.OPERATION.equals(fieldReference.field)) {
+                LOGGER.debug("Schema change record doesn't contains 'op' field");
+                continue;
+            }
             headers.add(fieldReference.getNewField(), fieldReference.getValue(originalRecordValue),
-                    fieldReference.getSchema(originalRecordValue.schema()));
+                fieldReference.getSchema(originalRecordValue.schema()));
         }
 
         return headers;
@@ -279,7 +318,7 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         Struct originalRecordValue = (Struct) originalRecord.value();
 
         Schema updatedSchema = schemaUpdateCache.computeIfAbsent(value.schema(),
-                s -> makeUpdatedSchema(additionalFields, value.schema(), originalRecordValue));
+            s -> makeUpdatedSchema(additionalFields, value.schema(), originalRecordValue));
 
         // Update the value with the new fields
         Struct updatedValue = new Struct(updatedSchema);
@@ -295,13 +334,13 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         }
 
         return unwrappedRecord.newRecord(
-                unwrappedRecord.topic(),
-                unwrappedRecord.kafkaPartition(),
-                unwrappedRecord.keySchema(),
-                unwrappedRecord.key(),
-                updatedSchema,
-                updatedValue,
-                unwrappedRecord.timestamp());
+            unwrappedRecord.topic(),
+            unwrappedRecord.kafkaPartition(),
+            unwrappedRecord.keySchema(),
+            unwrappedRecord.key(),
+            updatedSchema,
+            updatedValue,
+            unwrappedRecord.timestamp());
     }
 
     private R dropFields(R record) {
@@ -386,7 +425,8 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         return builder.build();
     }
 
-    private SchemaBuilder updateSchema(FieldReference fieldReference, SchemaBuilder builder, Schema originalRecordSchema) {
+    private SchemaBuilder updateSchema(FieldReference fieldReference, SchemaBuilder builder,
+        Schema originalRecordSchema) {
         return builder.field(fieldReference.getNewField(), fieldReference.getSchema(originalRecordSchema));
     }
 
@@ -398,9 +438,10 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
     public ConfigDef config() {
         final ConfigDef config = new ConfigDef();
         Field.group(config, null, ExtractNewRecordStateConfigDefinition.DROP_TOMBSTONES,
-                ExtractNewRecordStateConfigDefinition.HANDLE_DELETES, ExtractNewRecordStateConfigDefinition.ADD_FIELDS,
-                ExtractNewRecordStateConfigDefinition.ADD_HEADERS,
-                ExtractNewRecordStateConfigDefinition.ROUTE_BY_FIELD);
+            ExtractNewRecordStateConfigDefinition.HANDLE_DELETES, ExtractNewRecordStateConfigDefinition.ADD_FIELDS,
+            ExtractNewRecordStateConfigDefinition.ADD_HEADERS,
+            ExtractNewRecordStateConfigDefinition.ROUTE_BY_FIELD,
+            ExtractNewRecordStateConfigDefinition.SCHEMA_CHANGE_RECORDS_ADD_HEADERS_ENABLED);
         return config;
     }
 
@@ -441,11 +482,9 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
 
             if (parts.length == 1) {
                 this.newField = prefix + (splits.length == 1 ? this.field : this.struct + "_" + this.field);
-            }
-            else if (parts.length == 2) {
+            } else if (parts.length == 2) {
                 this.newField = prefix + parts[1];
-            }
-            else {
+            } else {
                 throw new IllegalArgumentException("Unexpected field name: " + field);
             }
         }
@@ -456,13 +495,11 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         private static String determineStruct(String simpleFieldName) {
             if (simpleFieldName.equals(Envelope.FieldName.OPERATION) || simpleFieldName.equals(Envelope.FieldName.TIMESTAMP)) {
                 return null;
-            }
-            else if (simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_ID_KEY) ||
-                    simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_DATA_COLLECTION_ORDER_KEY) ||
-                    simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_TOTAL_ORDER_KEY)) {
+            } else if (simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_ID_KEY) ||
+                simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_DATA_COLLECTION_ORDER_KEY) ||
+                simpleFieldName.equals(TransactionMonitor.DEBEZIUM_TRANSACTION_TOTAL_ORDER_KEY)) {
                 return Envelope.FieldName.TRANSACTION;
-            }
-            else {
+            } else {
                 return Envelope.FieldName.SOURCE;
             }
         }
@@ -470,12 +507,11 @@ public class ExtractNewRecordState<R extends ConnectRecord<R>> implements Transf
         static List<FieldReference> fromConfiguration(String fieldPrefix, String addHeadersConfig) {
             if (Strings.isNullOrEmpty(addHeadersConfig)) {
                 return Collections.emptyList();
-            }
-            else {
+            } else {
                 return Arrays.stream(addHeadersConfig.split(","))
-                        .map(String::trim)
-                        .map(field -> new FieldReference(fieldPrefix, field))
-                        .collect(Collectors.toList());
+                    .map(String::trim)
+                    .map(field -> new FieldReference(fieldPrefix, field))
+                    .collect(Collectors.toList());
             }
         }
 
